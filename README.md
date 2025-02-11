@@ -1,5 +1,28 @@
 # docker-cheatsheet
-
+1. [Project Structure](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#the-project-structure)
+2. [Docker](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#docker)
+   1. [Main elements to know](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#main-elements-to-know)
+   2. [Installation](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#installation)
+   3. [Dockerfile components](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#dockerfile-components)
+   4. [Key Docker commands](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#key-docker-commands)
+   5. [Docker Compose Elements](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#docker-compose-elements)
+   6. [Docker Flags](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#docker-flags)
+   7. [Volume Types](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#volume-types)
+   8. [Restart Policies](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#restart-policies)
+3. [Add Docker To Project](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#add-docker-to-the-project)
+   1. [Requirements](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#requirements)
+   2. [Poll Dockerfile](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#poll-dockerfile)
+   3. [Result Dockerfile](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#result-dockerfile)
+   4. [Worker Dockerfile](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#worker-dockerfile)
+   5. [Dockerignore file](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#dockerignore-file)
+   6. [Docker Compose File](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#docker-compose-file)
+   7. [Redis service](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#redis)
+   8. [DB Service](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#db)
+   9. [Worker, Poll and Result services](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#worker-poll-result)
+   10. [Networks](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#networks)
+   11. [Volumes](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#volumes)
+   12. [.env and .gitignore](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#env-and-gitignore)
+4. [Run the project](https://github.com/yanamlnk/docker-cheatsheet?tab=readme-ov-file#run-the-project) 
 
 ## The project structure
 All project files were given by the school (except Docker). Here is a small description:
@@ -182,6 +205,15 @@ tmpfs:
   - /temp
 ```
 
+### Restart Policies
+```
+restart:
+  no             # Never restart
+  always         # Always restart
+  on-failure     # Restart only on failure
+  unless-stopped # Always restart unless manually stopped
+```
+
 ## Add Docker to the project
 ### Requirements
 There are the following requirements: 
@@ -207,6 +239,16 @@ There are the following requirements:
     – is based on eclipse-temurin:21-jre-alpine ;
     – is the one really running the worker using `java -jar worker-jar-with-dependencies.jar`.
 - Docker images must be as simple and lightweight as possible.
+- Name of the Compose file is `compose.yml`
+- Compose file should contain:
+  - 5 services:
+    – poll (builds poll image, redirects port 5000 of the host to the port 80 of the container)
+    – redis (uses an existing official image of Redis, opens port 6379)
+    – worker (builds worker image)
+    – db (uses an existing official image of PostgreSQL, has its database schema created during container first start)
+    – result (builds result image, redirects port 5001 of the host to the port 80 of the container)
+  - 3 networks: poll-tier, result-tier and back-tier.
+  - 1 volume: db-data.
 
 ### Poll Dockerfile
 ```
