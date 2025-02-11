@@ -99,6 +99,10 @@ Container <-> Network (for communication)
 ### Installation
 Install [Docker Desktop](https://docs.docker.com/desktop/), that includes everything necessary + UI.
 
+To check if you have Docker and Compose: 
+- `docker --version`
+- `docker compose version`
+
 ### Dockerfile components:
 ```
 FROM         # Base image to build upon
@@ -260,4 +264,215 @@ WORKDIR /app
 COPY --from=builder /app/target/worker-jar-with-dependencies.jar .
 CMD ["java", "-jar", "worker-jar-with-dependencies.jar"]
 ```
-- this Dockerfile is interesting because it is multi-stage
+- this Dockerfile is interesting because it is multi-stage, which is used to create a smaller and more efficient final image.
+- First stage:
+  - **AS builder** names this stage for later reference
+  - **RUN** 2 commands: `mvn dependency:resolve` to download dependencies, `mvn package` to create jar file
+- Second stage:
+  - **COPY --from=builder** takes this file from the stage named `builder`
+ 
+```
+Stage 1 (builder)             Stage 2 (final)
++------------------+          +----------------+
+| Maven image      |          | JRE image      |
+| Source code      |   JAR    |                |
+| Builds JAR    -----→-------→ Only JAR file   |
+| ~400MB           |          | ~100MB         |
++------------------+          +----------------+
+```
+### Dockerignore file
+- It tells Docker which files/directories to EXCLUDE during the build process
+- Makes builds faster by copying fewer files
+- Reduces the final image size
+
+In result folder, I have create `.dockerignore` and added to the file `node_modules`.
+Thanks to this:
+- Docker skips copying the `node_modules` directory
+- Dependencies are cleanly installed inside the container (because they could have been installed using specific OS, which can be unsupposted by other systems)
+- Build process is faster and cleaner
+
+### Docker Compose File
+Now in the root of the project, create `compose.yml` file:
+```
+version: '3.8'
+
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - poll-tier
+      - back-tier
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    networks:
+      - back-tier
+      - result-tier
+    restart: unless-stopped
+
+  worker:
+    build: ./worker
+    environment:
+      - REDIS_HOST=redis 
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    networks:
+      - back-tier
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
+    
+  poll:
+    build: ./poll
+    ports:
+      - "5000:80"
+    environment:
+      - REDIS_HOST=redis 
+      - OPTION_A=${OPTION_A}
+      - OPTION_B=${OPTION_B}
+      - OPTION_C=${OPTION_C}
+      - OPTION_D=${OPTION_D}
+    networks:
+      - poll-tier
+    depends_on:
+      - redis 
+    restart: unless-stopped
+
+  result:
+    build: ./result
+    ports:
+      - "5001:80"
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    networks:
+      - result-tier
+    depends_on:
+      - db
+    restart: unless-stopped
+
+networks:
+  poll-tier:
+  result-tier:
+  back-tier:
+
+volumes:
+  db-data:
+```
+
+- `version` affects available features and syntax and specifies Docker Compose file format version. 3.8 is very stable, even though not the latest one
+- `services` defines application containers. The order of service declarations in the `compose.yml` file doesn't determine the startup order. The actual startup order is determined by the `depends_on` configuration.:
+### redis:
+```
+redis:
+    image: redis:alpine        # Uses pre-built Redis image
+    ports:
+      - "6379:6379"           # Port mapping (host:container)
+    networks:                  # Connected networks
+      - poll-tier
+      - back-tier
+    restart: unless-stopped
+```
+- regarding ports: `5000:80` means that outside world uses localhost:5000, inside container uses port 80. When you open `localhost:5000` in browser, Docker forwards that traffic to port 80 in the container
+### db:
+```
+db:
+    image: postgres:15-alpine
+    volumes:                   # Data persistence
+      - db-data:/var/lib/postgresql/data         # Named volume
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql  # Init script
+    environment:              # Environment variables
+      - POSTGRES_USER=${POSTGRES_USER}
+```
+- environment creates environment values in the container. ${POSTGRES_USER} is a value saved in `.env` file.
+- for volumes:
+  - `db-data:/var/lib/postgresql/data` creates a named volume in location `/var/lib/postgresql/data`
+  - `./schema.sql:/docker-entrypoint-initdb.d/schema.sql` - `./schema.sql` is source file on host machine, `/docker-entrypoint-initdb.d/schema.sql` is a destination path in container. `/docker-entrypoint-initdb.d/` is a special directory in PostdreSQL:
+    - PostgreSQL automatically executes any .sql files in this directory
+    - Only runs when the database is first initialized (first time startup)
+    - Used to set up initial database schema, tables, etc.
+- so you don't need to additionaly create a user or configure the database, the container will:
+  - Use the credentials from your .env file
+  - Automatically create the user
+  - Run the schema.sql when the container first starts
+
+### worker, poll, result
+```
+worker:
+    build: ./worker           # Build from Dockerfile
+    environment:              
+      - REDIS_HOST=redis      # Service discovery
+      - POSTGRES_HOST=db      # Reference other services
+    depends_on:               # Startup order
+      - redis
+      - db
+```
+- `build` includes path to the corresponding Dockerbuild file
+- environment values in this case (`redis` and `db`) are the name of the services. Services on the same network can talk to each other using service names as hostnames. Example: Worker can reach Redis using just "redis" as hostname. Docker's internal DNS automatically resolves these service names to the correct container IP addresses. So `REDIS_HOST=redis` tells the app to look for a host named 'redis'
+- `depends_on` declares an order. Worker must be created after `redis` and `db`
+
+### networks
+```
+networks:
+  poll-tier:    # For poll and redis
+  result-tier:  # For result and db
+  back-tier:    # For worker, redis, and db
+```
+is a declaration for the networks
+
+### volumes
+```
+volumes:
+  db-data:      # Named volume for database persistence
+```
+is a declaration of the volumes 
+  
+### .env and .gitignore
+In root, there is also `.env` file with all values for environment values. 
+```
+# Database settings
+POSTGRES_USER=____
+POSTGRES_PASSWORD=____
+POSTGRES_DB=____
+POSTGRES_PORT=____
+
+# Vote options
+OPTION_A=____
+OPTION_B=____
+OPTION_C=____
+OPTION_D=____
+```
+
+And `.gitignore` includes files that are not needed to be pushed to the git: 
+```
+.env
+result/node_modules
+worker/target
+```
+## Run the project
+Now to start the project, open the Docker Desktop to start the Docker, and then run command `docker compose up --build`.
+You don't need to use `--build` everytime to launch the project, only the for the first time.
+To stop container: `docker compose down`.
+
+The application should be accessible at:
+- Poll interface: http://localhost:5000
+- Results interface: http://localhost:5001
+
+
